@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 
 
@@ -37,6 +39,8 @@ class Producto(models.Model):
 
 
 class Carrito(models.Model):
+    # Identifica al carrito de un visitante anónimo (no hay registro de clientes).
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
