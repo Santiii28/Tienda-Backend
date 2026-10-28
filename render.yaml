@@ -1,0 +1,19 @@
+# Blueprint de Render para el backend (Django + DRF).
+# La base de datos es Neon (externa): su DATABASE_URL se pega a mano en el panel.
+services:
+  - type: web
+    name: tienda-backend
+    runtime: python
+    plan: free
+    buildCommand: bash build.sh
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/salud/
+    envVars:
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false # se escribe en el panel de Render (cadena de conexión de Neon)
+      - key: FRONTEND_ORIGINS
+        sync: false # dominio de Vercel, p. ej. https://mi-tienda.vercel.app

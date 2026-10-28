@@ -1,4 +1,7 @@
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate, get_user_model, login, logout
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as ErrorDeValidacion
+from django.db import IntegrityError
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from drf_spectacular.utils import extend_schema
@@ -26,6 +29,36 @@ class LoginSerializer(serializers.Serializer):
 class UsuarioSerializer(serializers.Serializer):
     autenticado = serializers.BooleanField()
     username = serializers.CharField(allow_null=True)
+    nombre = serializers.CharField(allow_null=True)
+    correo = serializers.CharField(allow_null=True)
+    es_admin = serializers.BooleanField()
+
+
+class RegistroSerializer(serializers.Serializer):
+    """Datos para crear una cuenta de cliente. El correo es también el usuario."""
+
+    nombre = serializers.CharField(max_length=100)
+    correo = serializers.EmailField(max_length=150)
+    password = serializers.CharField(write_only=True, max_length=128)
+
+
+def datos_de_usuario(usuario):
+    """Lo que el frontend necesita saber de quien tiene la sesión abierta."""
+    if usuario is None or not usuario.is_authenticated:
+        return {
+            "autenticado": False,
+            "username": None,
+            "nombre": None,
+            "correo": None,
+            "es_admin": False,
+        }
+    return {
+        "autenticado": True,
+        "username": usuario.username,
+        "nombre": usuario.first_name or usuario.username,
+        "correo": usuario.email or None,
+        "es_admin": usuario.is_staff,
+    }
 
 
 class DetalleSerializer(serializers.Serializer):
@@ -57,19 +90,80 @@ class LoginView(APIView):
         datos = LoginSerializer(data=request.data)
         datos.is_valid(raise_exception=True)
 
+        nombre_de_usuario = datos.validated_data["username"].strip()
+        if "@" in nombre_de_usuario:
+            # Las cuentas de clientes usan el correo en minúsculas como usuario.
+            nombre_de_usuario = nombre_de_usuario.lower()
+
         usuario = authenticate(
             request,
-            username=datos.validated_data["username"],
+            username=nombre_de_usuario,
             password=datos.validated_data["password"],
         )
-        if usuario is None or not usuario.is_staff:
+        if usuario is None:
             return Response(
                 {"detail": "Usuario o contraseña incorrectos."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
         login(request, usuario)
-        return Response({"autenticado": True, "username": usuario.username})
+        return Response(datos_de_usuario(usuario))
+
+
+class RegistroView(APIView):
+    authentication_classes = [SesionConCSRF]
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary="Crear una cuenta de cliente",
+        description="Crea la cuenta (sin permisos de administrador) e inicia la "
+        "sesión. El correo se usa como nombre de usuario y la contraseña debe "
+        "cumplir las reglas de Django. Exige el token CSRF.",
+        request=RegistroSerializer,
+        responses={201: UsuarioSerializer},
+        auth=[],
+    )
+    def post(self, request):
+        datos = RegistroSerializer(data=request.data)
+        datos.is_valid(raise_exception=True)
+
+        nombre = datos.validated_data["nombre"].strip()
+        correo = datos.validated_data["correo"].strip().lower()
+        clave = datos.validated_data["password"]
+        if not nombre:
+            return Response(
+                {"nombre": ["Este campo no puede estar vacío."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        Usuario = get_user_model()
+        if Usuario.objects.filter(username__iexact=correo).exists():
+            return self.correo_repetido()
+
+        nuevo = Usuario(username=correo, email=correo, first_name=nombre)
+        try:
+            # Con el usuario armado, también se compara la clave con su nombre y correo.
+            validate_password(clave, user=nuevo)
+        except ErrorDeValidacion as error:
+            return Response(
+                {"password": list(error.messages)}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        nuevo.set_password(clave)
+        try:
+            nuevo.save()
+        except IntegrityError:
+            return self.correo_repetido()
+
+        login(request, nuevo, backend="django.contrib.auth.backends.ModelBackend")
+        return Response(datos_de_usuario(nuevo), status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def correo_repetido():
+        return Response(
+            {"correo": ["Ya existe una cuenta con este correo."]},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 class LogoutView(APIView):
@@ -87,6 +181,4 @@ class YoView(APIView):
 
     @extend_schema(responses={200: UsuarioSerializer})
     def get(self, request):
-        if request.user.is_authenticated and request.user.is_staff:
-            return Response({"autenticado": True, "username": request.user.username})
-        return Response({"autenticado": False, "username": None})
+        return Response(datos_de_usuario(request.user))

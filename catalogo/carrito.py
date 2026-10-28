@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
@@ -10,6 +11,8 @@ from .serializers import (
     AgregarItemSerializer,
     CambiarCantidadSerializer,
     CarritoSerializer,
+    CompraRealizadaSerializer,
+    ComprarSerializer,
 )
 
 # El carrito de un visitante se identifica solo por su token (va en la URL).
@@ -115,3 +118,58 @@ class CarritoItemDetalleView(VistaCarrito):
         carrito = self.obtener_carrito(token)
         self.obtener_item(carrito, item_id).delete()
         return self.respuesta(carrito)
+
+
+class CarritoComprarView(VistaCarrito):
+    @extend_schema(
+        summary="Confirmar la compra del carrito (simulada)",
+        description="No hay pasarela de pago real: la compra es simulada. "
+        "Valida los datos de contacto y entrega y que haya existencias, devuelve "
+        "el resumen para el aviso de compra exitosa y deja el carrito vacío. "
+        "No guarda los datos del comprador ni descuenta las existencias.",
+        request=ComprarSerializer,
+        responses={200: CompraRealizadaSerializer},
+    )
+    def post(self, request, token):
+        datos = ComprarSerializer(data=request.data)
+        datos.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            carrito = self.obtener_carrito(token)
+            items = list(carrito.items.select_related("producto"))
+            if not items:
+                return Response(
+                    {"detail": "El carrito está vacío."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            for item in items:
+                if not item.producto.hay_existencias(item.cantidad):
+                    return Response(
+                        {
+                            "detail": f"«{item.producto.nombre}»: ya no hay "
+                            f"{item.cantidad} unidades disponibles. "
+                            "Ajusta la cantidad en el carrito."
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+            resumen = {
+                "mensaje": "¡Compra exitosa!",
+                "nombre": datos.validated_data["nombre"],
+                "direccion": datos.validated_data["direccion"],
+                "ciudad": datos.validated_data["ciudad"],
+                "items": [
+                    {
+                        "producto_nombre": item.producto.nombre,
+                        "cantidad": item.cantidad,
+                        "subtotal": item.calcular_subtotal(),
+                    }
+                    for item in items
+                ],
+                "total": carrito.calcular_total(),
+                "envio": carrito.calcular_envio(),
+                "total_a_pagar": carrito.calcular_total_a_pagar(),
+            }
+            carrito.items.all().delete()
+
+        return Response(CompraRealizadaSerializer(resumen).data)

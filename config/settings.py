@@ -11,9 +11,11 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
+from decimal import Decimal
 from pathlib import Path
 
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -22,16 +24,33 @@ load_dotenv(BASE_DIR / ".env")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
+# La configuración sensible sale de variables de entorno (.env en local; panel
+# del hosting en producción). Ver .env.example.
+
+
+def lista_de_entorno(nombre, por_defecto=""):
+    """Lee una variable de entorno con valores separados por comas."""
+    return [v.strip() for v in os.getenv(nombre, por_defecto).split(",") if v.strip()]
+
+
+CLAVE_INSEGURA = "clave-insegura-solo-para-desarrollo"
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv("SECRET_KEY", "clave-insegura-solo-para-desarrollo")
+SECRET_KEY = os.getenv("SECRET_KEY", CLAVE_INSEGURA)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv("DEBUG", "True") == "True"
+# Si la variable no existe se asume producción (DEBUG apagado).
+DEBUG = os.getenv("DEBUG", "False") == "True"
 
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+if not DEBUG and SECRET_KEY == CLAVE_INSEGURA:
+    raise ImproperlyConfigured(
+        "Falta la variable SECRET_KEY: en producción no se permite la clave de desarrollo."
+    )
+
+ALLOWED_HOSTS = lista_de_entorno("ALLOWED_HOSTS", "localhost,127.0.0.1")
+# Render publica el nombre público del servicio en esta variable.
+if os.getenv("RENDER_EXTERNAL_HOSTNAME"):
+    ALLOWED_HOSTS.append(os.environ["RENDER_EXTERNAL_HOSTNAME"])
 
 # Application definition
 
@@ -52,13 +71,22 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'catalogo.middleware.BarraFinalEnApi',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'catalogo.middleware.SinCacheEnDatosPrivados',
 ]
+
+# En producción WhiteNoise sirve los estáticos; en desarrollo lo hace runserver.
+if not DEBUG:
+    MIDDLEWARE.insert(
+        MIDDLEWARE.index('django.middleware.security.SecurityMiddleware') + 1,
+        'whitenoise.middleware.WhiteNoiseMiddleware',
+    )
 
 ROOT_URLCONF = 'config.urls'
 
@@ -128,16 +156,18 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
-
-# Email
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
-
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
+# WhiteNoise sirve los estáticos del panel técnico de Django y de Swagger sin
+# necesitar un servidor aparte.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
 }
+
+
+# Correo: la aplicación no envía correos (no hay registro de clientes ni pedidos),
+# por eso no se configura MAILERS.
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
@@ -156,14 +186,49 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
 }
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+# Orígenes del frontend. En desarrollo es Vite (que reenvía /api por su proxy);
+# en producción es el dominio de Vercel, que se declara en FRONTEND_ORIGINS
+# (por ejemplo: https://mi-tienda.vercel.app). Sin barra final.
+ORIGENES_DESARROLLO = ["http://localhost:5173", "http://127.0.0.1:5173"]
+ORIGENES_FRONTEND = ORIGENES_DESARROLLO + lista_de_entorno("FRONTEND_ORIGINS")
+
+CORS_ALLOWED_ORIGINS = ORIGENES_FRONTEND
 
 # Orígenes desde los que el navegador puede enviar peticiones con CSRF
-# (el frontend en desarrollo, que pasa por el proxy de Vite).
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+# (con el proxy/rewrite, el Origin es el del frontend y el Host es el del backend).
+CSRF_TRUSTED_ORIGINS = ORIGENES_FRONTEND
+
+# ---------------------------------------------------------------------------
+# Seguridad (Criterio 8): HTTPS, cookies y cabeceras
+# ---------------------------------------------------------------------------
+# El token CSRF lo lee JavaScript para enviarlo en la cabecera X-CSRFToken, por
+# eso CSRF_COOKIE_HTTPONLY queda en False. La cookie de sesión sí es HttpOnly.
+CSRF_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_HTTPONLY = True
+
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = "DENY"
+SECURE_REFERRER_POLICY = "same-origin"
+
+if not DEBUG:
+    # El hosting termina el TLS y reenvía la petición con X-Forwarded-Proto.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = True
+    # El chequeo de salud de la plataforma llega sin HTTPS.
+    SECURE_REDIRECT_EXEMPT = [r"^api/salud/$"]
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    # HSTS: el navegador solo volverá a usar HTTPS con este sitio.
+    SECURE_HSTS_SECONDS = int(os.getenv("HSTS_SECONDS", "31536000"))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_PRELOAD = False
+
+    # Decisión consciente: la app vive en un subdominio compartido del hosting
+    # (*.onrender.com), así que no se puede exigir HTTPS a "todos los subdominios"
+    # ni pedir la inclusión en la lista de precarga de los navegadores.
+    SILENCED_SYSTEM_CHECKS = ["security.W005", "security.W021"]
+
+# Costo de envío que se suma al total del carrito. Es un valor fijo de la tienda
+# (decisión del equipo); se puede cambiar con la variable de entorno COSTO_ENVIO.
+COSTO_ENVIO = Decimal(os.getenv("COSTO_ENVIO", "10000"))

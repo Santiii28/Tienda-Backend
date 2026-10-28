@@ -1,5 +1,6 @@
 import uuid
 
+from django.conf import settings
 from django.db import models
 
 
@@ -19,6 +20,10 @@ class Categoria(models.Model):
 class Producto(models.Model):
     nombre = models.CharField(max_length=150)
     precio = models.DecimalField(max_digits=12, decimal_places=2)
+    # Precio de antes, solo si el producto está en oferta (la tienda lo muestra tachado).
+    precio_anterior = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
     existencias = models.PositiveIntegerField(default=0)
     descripcion = models.TextField(blank=True)
     imagen = models.URLField(blank=True)
@@ -48,6 +53,13 @@ class Carrito(models.Model):
 
     def calcular_total(self):
         return sum(item.calcular_subtotal() for item in self.items.all())
+
+    def calcular_envio(self):
+        # Un carrito vacío no tiene nada que enviar, así que no cobra envío.
+        return settings.COSTO_ENVIO if self.items.exists() else 0
+
+    def calcular_total_a_pagar(self):
+        return self.calcular_total() + self.calcular_envio()
 
 
 class ItemCarrito(models.Model):
