@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
@@ -43,3 +44,17 @@ urlpatterns = [
         name="swagger-ui",
     ),
 ]
+
+
+# Respuestas genéricas hacia afuera: sin rutas de archivos ni trazas.
+# El detalle del error queda en los registros del servidor.
+def error_404(request, exception):
+    return JsonResponse({"detail": "No encontrado."}, status=404)
+
+
+def error_500(request):
+    return JsonResponse({"detail": "Error interno del servidor."}, status=500)
+
+
+handler404 = error_404
+handler500 = error_500
