@@ -232,3 +232,35 @@ if not DEBUG:
 # Costo de envío que se suma al total del carrito. Es un valor fijo de la tienda
 # (decisión del equipo); se puede cambiar con la variable de entorno COSTO_ENVIO.
 COSTO_ENVIO = Decimal(os.getenv("COSTO_ENVIO", "10000"))
+
+# ---------------------------------------------------------------------------
+# Fuerza bruta y registros (Laboratorio de seguridad, partes 2.5 y 6.4)
+# ---------------------------------------------------------------------------
+# Intentos fallidos permitidos por usuario y tiempo de bloqueo (ver catalogo/seguridad.py).
+LOGIN_MAX_INTENTOS = int(os.getenv("LOGIN_MAX_INTENTOS", "5"))
+LOGIN_VENTANA_SEGUNDOS = int(os.getenv("LOGIN_VENTANA_SEGUNDOS", "900"))
+
+# Caché en memoria: sirve con el único proceso de gunicorn del plan gratuito.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "tienda-intentos",
+    }
+}
+
+# Los detalles de los errores van a la consola del servidor (los logs de Render);
+# hacia afuera solo salen mensajes genéricos (ver handler404/handler500 en urls.py).
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "simple": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"},
+    },
+    "handlers": {
+        "consola": {"class": "logging.StreamHandler", "formatter": "simple"},
+    },
+    "loggers": {
+        "django": {"handlers": ["consola"], "level": "INFO"},
+        "tienda": {"handlers": ["consola"], "level": "INFO", "propagate": False},
+    },
+}
