@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as ErrorDeValidacion
@@ -10,6 +11,8 @@ from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from . import seguridad
 
 
 class SesionConCSRF(SessionAuthentication):
@@ -83,7 +86,9 @@ class LoginView(APIView):
 
     @extend_schema(
         request=LoginSerializer,
-        responses={200: UsuarioSerializer},
+        responses={200: UsuarioSerializer, 401: DetalleSerializer, 429: DetalleSerializer},
+        description="Inicia la sesión. Tras varios intentos fallidos seguidos con el "
+        "mismo usuario, la cuenta se bloquea unos minutos (429).",
         auth=[],
     )
     def post(self, request):
@@ -95,18 +100,45 @@ class LoginView(APIView):
             # Las cuentas de clientes usan el correo en minúsculas como usuario.
             nombre_de_usuario = nombre_de_usuario.lower()
 
+        if seguridad.bloqueado(nombre_de_usuario):
+            seguridad.registro.warning(
+                "Inicio de sesión bloqueado por demasiados intentos: %s",
+                seguridad.enmascarar(nombre_de_usuario),
+            )
+            minutos = settings.LOGIN_VENTANA_SEGUNDOS // 60
+            respuesta = Response(
+                {"detail": f"Demasiados intentos. Espere {minutos} minutos antes de volver a intentar."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+            respuesta["Retry-After"] = str(settings.LOGIN_VENTANA_SEGUNDOS)
+            return respuesta
+
         usuario = authenticate(
             request,
             username=nombre_de_usuario,
             password=datos.validated_data["password"],
         )
         if usuario is None:
+            intentos = seguridad.registrar_fallo(nombre_de_usuario)
+            seguridad.registro.warning(
+                "Inicio de sesión fallido: %s (intento %d de %d)",
+                seguridad.enmascarar(nombre_de_usuario),
+                intentos,
+                settings.LOGIN_MAX_INTENTOS,
+            )
+            # El mismo mensaje para «no existe» y «clave incorrecta»: no revela qué correos tienen cuenta.
             return Response(
                 {"detail": "Usuario o contraseña incorrectos."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
+        seguridad.limpiar_fallos(nombre_de_usuario)
         login(request, usuario)
+        seguridad.registro.info(
+            "Inicio de sesión correcto (usuario %s, %s)",
+            usuario.pk,
+            "administrador" if usuario.is_staff else "cliente",
+        )
         return Response(datos_de_usuario(usuario))
 
 
