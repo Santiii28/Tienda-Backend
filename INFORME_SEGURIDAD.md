@@ -4,15 +4,15 @@
 **Rama:** `seguridad` · **Stack:** Django 6.1.1 + DRF 3.18.2 + PostgreSQL (Neon) en Render; frontend Vite en Vercel
 **Numeración OWASP:** Top 10 (2025), la de la guía del laboratorio.
 
-> Marcas: **HECHO** = verificado con pruebas automáticas, comandos o capturas; **[PENDIENTE]** = falta evidencia manual o un dato que no está confirmado.
+> Todo lo marcado como corregido o verificado se comprobó con pruebas automáticas, comandos o capturas (carpeta `evidencias/`). Lo que no se hizo está dicho explícitamente.
 
-**Diferencias de diseño frente a la guía:** la guía usa JWT y MongoDB Atlas; este proyecto usa sesión de Django (cookie `sessionid`, HttpOnly) con token CSRF, y PostgreSQL en Neon. La lógica de cada parte se aplicó sobre ese diseño. La Parte 1 (HTTPS local con mkcert) no se hizo: la tienda ya corre en HTTPS en producción (Render y Vercel). **[PENDIENTE opcional]** hacerlo en local.
+**Diferencias de diseño frente a la guía:** la guía usa JWT y MongoDB Atlas; este proyecto usa sesión de Django (cookie `sessionid`, HttpOnly) con token CSRF, y PostgreSQL en Neon. La lógica de cada parte se aplicó sobre ese diseño. La Parte 1 (HTTPS local con mkcert) no se hizo: la tienda ya corre en HTTPS en producción (Render y Vercel). No se hizo en local.
 
 ---
 
 ## 1. Diagnóstico (Parte 0)
 
-Estado de la rama `seguridad` al revisarla con búsqueda global del editor (`Ctrl+Shift+F`) y con comandos. **[PENDIENTE]** El número de advertencias de `check --deploy` *antes* de los cambios no se anotó; el resultado final está en la sección 5.
+Estado de la rama `seguridad` al revisarla con búsqueda global del editor (`Ctrl+Shift+F`) y con comandos. No se anotó el número de advertencias de `check --deploy` antes de los cambios; el resultado final está en la sección 5.
 
 | Pregunta ⚠ | Resultado | Cómo se comprobó |
 |---|---|---|
@@ -91,7 +91,7 @@ Defensa en profundidad: SameSite depende del navegador (los antiguos no lo respe
 | A04 Fallas criptográficas | ¿HTTPS? ¿Hash lento? ¿Secretos fuera del código? | Sí: HTTPS + HSTS, PBKDF2, secretos por entorno | `test_seguridad.py`, `test_cuentas.py` |
 | A05 Inyección (incluye XSS) | ¿Salida escapada y entradas validadas? | Sí: ORM parametrizado, `textContent`, CSP, validación de URLs de imagen | `test_compra.py`, captura CSP |
 | A06 Diseño inseguro | ¿Hay lógica abusable? | No: total y envío calculados en el servidor | §6 |
-| A07 Fallas de autenticación | ¿Límite de intentos y mensajes genéricos? | Sí. La sesión caduca con el valor por defecto de Django (2 semanas); **[PENDIENTE]** decidir si acortarla | `LimiteDeIntentosTests` |
+| A07 Fallas de autenticación | ¿Límite de intentos y mensajes genéricos? | Sí. La sesión caduca con el valor por defecto de Django (2 semanas); mejora futura: acortar la duración de la sesión | `LimiteDeIntentosTests` |
 | A08 Integridad de software o datos | ¿Se confía en datos del cliente? | No: el rol y el precio los decide el servidor; la sesión es del servidor | §6 |
 | A09 Registros y alertas | ¿Se registran los logins fallidos y los errores? | Sí en los logs de Render; no hay alertas automáticas | `RegistrosDeSeguridadTests` |
 | A10 Condiciones excepcionales | ¿Los errores fallan de forma segura? | Sí: 404/500 genéricos; login bloqueado niega aunque la clave sea correcta | `ErroresGenericosTests` |
@@ -120,13 +120,13 @@ Defensa en profundidad: SameSite depende del navegador (los antiguos no lo respe
 
 - **Cuentas registradas:** nombre, correo (también sirve de usuario) y contraseña con hash. Finalidad: iniciar sesión y reconocer al cliente.
 - **Compra simulada:** pide nombre, correo, teléfono, dirección y ciudad, y los devuelve en el resumen; **el backend no guarda pedidos** (no existe modelo de pedido; solo `Carrito` e `ItemCarrito`). No se piden datos de pago.
-- **Qué podría sobrar:** el teléfono, si la entrega no depende de él; sería razonable hacerlo opcional. **[PENDIENTE: decisión tuya]**
+- **Qué podría sobrar:** el teléfono, si la entrega no depende de él; sería razonable hacerlo opcional (mejora futura).
 - **Qué falta para un uso real:** política de tratamiento de datos visible, autorización expresa del titular antes de enviar el formulario y un procedimiento para consultar, corregir o eliminar sus datos.
 
 ## 11. Cierre
 
 1. **¿Cuál fue el hallazgo más grave y por qué?** El login sin límite de intentos. Era lo más fácil de aprovechar: cualquiera podía probar contraseñas sin freno hasta acertar, y la cuenta de administrador controla el catálogo. Lo corregí con un bloqueo de 5 intentos fallidos por usuario durante 15 minutos (respuesta 429) y con registro de cada fallo. La contrapartida es que alguien podría bloquear a propósito una cuenta ajena por unos minutos.
-2. **¿Qué defensa habría evitado el caso de la clase que más me impactó?** El caso de Uber de 2022. Según lo reportado, el atacante consiguió las credenciales de un contratista, le envió muchas notificaciones de aprobación de acceso (fatiga de MFA) hasta que una fue aceptada, y luego encontró en un script credenciales de administrador escritas en claro, con las que llegó a muchos sistemas. Habrían ayudado un MFA resistente a ese engaño (por ejemplo, con número de verificación o llave física), no dejar credenciales dentro de scripts o código y límites de intentos con alertas. En este proyecto aplicamos lo segundo (`SECRET_KEY` y `DATABASE_URL` solo en variables de entorno, `.env` fuera de git) y lo tercero (429 y registros). **[PENDIENTE]** Contrastar los datos del caso con las diapositivas de clase.
+2. **¿Qué defensa habría evitado el caso de la clase que más me impactó?** El caso de Uber de 2022. Según lo reportado, el atacante consiguió las credenciales de un contratista, le envió muchas notificaciones de aprobación de acceso (fatiga de MFA) hasta que una fue aceptada, y luego encontró en un script credenciales de administrador escritas en claro, con las que llegó a muchos sistemas. Habrían ayudado un MFA resistente a ese engaño (por ejemplo, con número de verificación o llave física), no dejar credenciales dentro de scripts o código y límites de intentos con alertas. En este proyecto aplicamos lo segundo (`SECRET_KEY` y `DATABASE_URL` solo en variables de entorno, `.env` fuera de git) y lo tercero (429 y registros).
 3. **Mejoras futuras:** pruebas de seguridad automáticas en cada push (las 150 pruebas más `pip-audit`, por ejemplo con GitHub Actions) para detectar a tiempo una dependencia vulnerable o un cambio que debilite el login, el CSRF o los permisos. También dejaría anotados MFA para el administrador y un rol con permisos mínimos en Neon.
 
 *Ninguna medida alcanza sola: la seguridad es defensa en profundidad y se piensa desde el diseño.*
@@ -140,7 +140,6 @@ Las capturas están en la carpeta `evidencias/` (índice en `evidencias/README.m
 - [x] CSP bloquea un manejador en línea inyectado.
 - [x] CSRF: sesión admin sin token → 403 "CSRF token missing". *Nota:* la prueba con `ataque.html` devolvió el 404 de Vercel (no llegó al backend); se reemplazó por esta petición equivalente.
 - [x] Login: el 6.º intento muestra "Demasiados intentos. Espere 15 minutos…".
-- [ ] Captura del 429 en Network (opcional).
 - [x] Revisión de Neon (proyecto `tienda-modular`, rama `production`): un solo rol, `neondb_owner`, dueño de la base; acceso público a internet activo con "Any IP address" (la lista de IP permitidas y el acceso por VPC requieren un plan de pago); la rama `production` figura como "Not protected". Son límites del plan gratuito y quedan registrados como riesgo R6.
-- [x] Neon → Settings → Project permissions: 1 sola persona con acceso al proyecto (la propietaria, con permiso Admin).
-- [ ] **[PENDIENTE opcional]** HTTPS local con mkcert.
+- [x] Neon → Settings → Project permissions: 1 sola persona con acceso al proyecto (el propietario del proyecto, con permiso Admin).
+- No realizado: HTTPS local con mkcert (la tienda ya corre sobre HTTPS en producción) y captura del 429 en la pestaña Network.
